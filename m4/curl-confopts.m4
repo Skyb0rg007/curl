@@ -500,6 +500,35 @@ AS_HELP_STRING([--disable-httpsrr],[Disable HTTPSRR support (experimental)]),
   esac
 ])
 
+dnl CURL_CHECK_OPTION_DNSSEC
+dnl -----------------------------------------------------
+dnl Verify whether configure has been invoked with option
+dnl --enable-dnssec or --disable-dnssec, and set
+dnl shell variable want_dnssec as appropriate.
+
+AC_DEFUN([CURL_CHECK_OPTION_DNSSEC], [
+  AC_MSG_CHECKING([whether to enable DNSSEC validation])
+  OPT_DNSSEC="default"
+  AC_ARG_ENABLE(dnssec,
+AS_HELP_STRING([--enable-dnssec],[Enable DNSSEC validation (experimental)])
+AS_HELP_STRING([--disable-dnssec],[Disable DNSSEC validation (experimental)]),
+  OPT_DNSSEC=$enableval)
+  case "$OPT_DNSSEC" in
+    yes)
+      dnl --enable-dnssec option used
+      want_dnssec="yes"
+      curl_dnssec_msg="enabled (--disable-dnssec)"
+      AC_MSG_RESULT([yes])
+      ;;
+    *)
+      dnl --disable-dnssec option used or not specified
+      want_dnssec="no"
+      curl_dnssec_msg="no      (--enable-dnssec)"
+      AC_MSG_RESULT([no])
+      ;;
+  esac
+])
+
 dnl CURL_CHECK_OPTION_ECH
 dnl -----------------------------------------------------
 dnl Verify whether configure has been invoked with option

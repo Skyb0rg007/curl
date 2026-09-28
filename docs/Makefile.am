@@ -55,6 +55,7 @@ INTERNALDOCS =                                   \
   internals/CONNECTION-FILTERS.md                \
   internals/CREDENTIALS.md                       \
   internals/CURLX.md                             \
+  internals/DNSSEC.md                            \
   internals/DYNBUF.md                            \
   internals/HASH.md                              \
   internals/LLIST.md                             \

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="US-ASCII"?>
+<testcase>
+<info>
+<keywords>
+unittest
+DNSSEC
+</keywords>
+</info>
+
+<client>
+<features>
+unittest
+</features>
+<name>
+DNSSEC validation unit tests
+</name>
+</client>
+
+# many validations, each one makes new contexts
+<verify>
+<limits>
+Allocations: 10000
+</limits>
+</verify>
+</testcase>

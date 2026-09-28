@@ -52,6 +52,7 @@ CURL_CHECK_OPTION_SYMBOL_HIDING
 CURL_CHECK_OPTION_ARES
 CURL_CHECK_OPTION_RT
 CURL_CHECK_OPTION_HTTPSRR
+CURL_CHECK_OPTION_DNSSEC
 CURL_CHECK_OPTION_ECH
 CURL_CHECK_OPTION_SSLS_EXPORT
 AC_MSG_CHECKING([whether to enable HTTP/3 proxy support])
@@ -5055,6 +5056,22 @@ else
 fi
 
 dnl *************************************************************
+dnl check whether DNSSEC validation is desired and possible
+dnl
+if test "$want_dnssec" = "yes"; then
+  AC_MSG_CHECKING([whether DNSSEC validation can be enabled])
+  if test "$USE_ARES" != "1"; then
+    AC_MSG_ERROR([--enable-dnssec requires c-ares (--enable-ares)])
+  fi
+  if test "$OPENSSL_ENABLED" != "1"; then
+    AC_MSG_ERROR([--enable-dnssec requires OpenSSL or a compatible library])
+  fi
+  AC_MSG_RESULT([yes])
+  AC_DEFINE(USE_DNSSEC, 1, [enable DNSSEC validation])
+  experimental="$experimental DNSSEC"
+fi
+
+dnl *************************************************************
 dnl check whether OpenSSL (lookalikes) have SSL_set0_wbio
 dnl
 if test "$OPENSSL_ENABLED" = "1"; then
@@ -5604,6 +5621,7 @@ AC_MSG_NOTICE([Configured to build curl/libcurl:
   proxy-HTTP3:      ${curl_proxy_http3_msg}
   ECH:              ${curl_ech_msg}
   HTTPS RR:         ${curl_httpsrr_msg}
+  DNSSEC:           ${curl_dnssec_msg}
   SSLS-EXPORT:      ${curl_ssls_export_msg}
   Protocols:        ${SUPPORT_PROTOCOLS_LOWER}
   Features:         ${SUPPORT_FEATURES}

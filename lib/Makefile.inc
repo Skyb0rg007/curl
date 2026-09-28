@@ -90,6 +90,10 @@ LIB_VDNS_CFILES =           \
   vdns/asyn-thrdd.c         \
   vdns/cf-dns.c             \
   vdns/dnscache.c           \
+  vdns/dnssec.c             \
+  vdns/dnssec-ares.c        \
+  vdns/dnssec-crypto.c      \
+  vdns/dnssec-wire.c        \
   vdns/doh.c                \
   vdns/hostip.c             \
   vdns/hostip4.c            \
@@ -100,6 +104,8 @@ LIB_VDNS_HFILES =           \
   vdns/asyn.h               \
   vdns/cf-dns.h             \
   vdns/dnscache.h           \
+  vdns/dnssec.h             \
+  vdns/dnssec-int.h         \
   vdns/doh.h                \
   vdns/hostip.h             \
   vdns/httpsrr.h

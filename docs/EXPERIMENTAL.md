@@ -54,6 +54,20 @@ Graduation requirements:
 
 - implementation stability over time with no known severe regressions
 
+## DNSSEC validation
+
+The DNSSEC validator needs an explicit build-time opt-in (`--enable-dnssec`
+for autotools, `-DUSE_DNSSEC=ON` for CMake). See
+[internals/DNSSEC](internals/DNSSEC.md).
+
+Graduation requirements:
+
+- a user of the validator in libcurl, like DANE support
+
+- validation of DoH responses
+
+- implementation stability over time with no known severe regressions
+
 ## The Rustls TLS backend
 
 Graduation requirements:

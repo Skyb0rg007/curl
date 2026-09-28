@@ -253,6 +253,7 @@ target_link_libraries(my_target PRIVATE CURL::libcurl)
 - `ENABLE_UNICODE`:                         Use the Unicode version of the Windows API functions. Default: `OFF`
 - `ENABLE_UNIX_SOCKETS`:                    Enable Unix domain sockets support. Default: `ON`
 - `USE_APPLE_IDN`:                          Use Apple built-in IDN support. Default: `OFF`
+- `USE_DNSSEC`:                             Enable DNSSEC validation (experimental). Default: `OFF`
 - `USE_ECH`:                                Enable ECH support (experimental). Default: `OFF`
 - `USE_HTTPSRR`:                            Enable HTTPS RR support (experimental). Default: `OFF`
 - `USE_PROXY_HTTP3`:                        Enable HTTP/3 proxy support (experimental). Default: `OFF`

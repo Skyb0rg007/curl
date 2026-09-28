@@ -218,12 +218,10 @@ of the chain.
 - DS digests: SHA-1 (1), SHA-256 (2) and SHA-384 (4).
 - RSA keys: 512 to 4096 bits, 1024 to 4096 bits for RSASHA512 (RFC 3110,
   RFC 5702).
-- NSEC3 records with more than 50 iterations make answers insecure (RFC 9276
-  section 3.2), after their signatures are validated, and when they are from
-  the zone that holds the name. BIND, Knot and PowerDNS use the same limit.
-  This leaves the names in such zones open to forged denials, as RFC 9276
-  section 4 explains, but treating them as bogus instead would break every
-  lookup of a name that does not exist in them, like most TLSA lookups.
+- NSEC3 proofs are checked up to 150 iterations, the limit Unbound uses.
+  NSEC3 records with more iterations are bogus (RFC 9276 section 3.2).
+  Iterations never make an answer insecure: RFC 9276 section 4 explains that
+  this leaves such zones open to forged answers.
 - A closest encloser proof where the NSEC3 covering the next closer name has
   the opt-out flag is insecure (RFC 5155 section 9.2).
 - Trust anchors: the root zone KSK-2017 and KSK-2024 DS records published by
@@ -247,8 +245,8 @@ NSEC3 hashing (CVE-2023-50868), a context has upper limits:
 - 128 signature verifications
 - 8 RRSIGs tried per RRset and signer, 4 keys tried per RRSIG and 3 signer
   zones per RRset
-- 1024 NSEC3 hash calculations
-- 24 nested zones in a chain of trust
+- 100000 SHA-1 calculations for NSEC3 hashes
+- 24 nested zones in a chain of trust, and a recursion depth of 48
 - 12 CNAME and DNAME records in a chain
 - 512 records in a response, 256 records in an RRset, 16 NSEC or NSEC3
   records in a proof

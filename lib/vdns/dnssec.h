@@ -129,7 +129,8 @@ void Curl_dnssec_ctx_destroy(struct Curl_dnssec_ctx *ctx);
 void Curl_dnssec_ctx_clear_anchors(struct Curl_dnssec_ctx *ctx);
 
 /* Add a trust anchor, given as a DS or DNSKEY record in presentation
-   (zone file) format, like
+   (zone file) format. Set the trust anchors before creating requests:
+   results are cached in the context. Like:
      ". IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409B..."
    The TTL and class are optional, the owner name is required. A zone with
    trust anchors is trusted through them only, its parent is not asked. */

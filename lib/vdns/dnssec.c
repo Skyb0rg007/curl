@@ -64,13 +64,15 @@
 #define DNSSEC_MAX_DS           16  /* DS records looked at */
 #define DNSSEC_MAX_ZONEKEYS     32  /* DNSKEY records looked at */
 #define DNSSEC_MAX_CHAIN        12  /* CNAME and DNAME links */
-#define DNSSEC_MAX_DEPTH        300 /* recursion depth */
+#define DNSSEC_MAX_DEPTH        48  /* recursion depth */
 #define DNSSEC_MAX_ZONES        24  /* nested zones in a chain of trust */
-#define DNSSEC_MAX_NSEC3_HASH   1024 /* NSEC3 hash calculations per context */
+/* SHA-1 calculations for NSEC3 hashes per context */
+#define DNSSEC_MAX_NSEC3_WORK   100000
 #define DNSSEC_MAX_BYTES        (4 * 1024 * 1024) /* response data kept */
-/* NSEC3 records with more iterations are treated as insecure (RFC 9276
-   section 3.2), like BIND, Knot and PowerDNS do */
-#define DNSSEC_NSEC3_MAX_ITER   50
+/* NSEC3 records with more iterations are bogus (RFC 9276 section 3.2). No
+   answers are insecure because of iterations: that would let anyone forge
+   denials in such zones (RFC 9276 section 4). Unbound uses the same limit. */
+#define DNSSEC_NSEC3_MAX_ITER   150
 
 #define DNSSEC_NONE ((size_t)-1)
 
@@ -127,7 +129,7 @@ struct Curl_dnssec_ctx {
   unsigned int flags;
   unsigned int nqueries;
   unsigned int nverify;
-  unsigned int nhash;
+  unsigned long nhash;             /* SHA-1 calculations for NSEC3 */
   size_t nbytes;
 };
 
@@ -204,7 +206,7 @@ static vstat zone_keys(struct vctx *v, const uint8_t *zone,
                        struct dnssec_zone **pz);
 static vstat walk_down(struct vctx *v, const uint8_t *name, uint8_t *zone);
 static vstat answer_rrset(struct vctx *v, struct dnssec_msg *m, size_t first,
-                          uint32_t *pttl);
+                          const uint8_t *known, uint32_t *pttl);
 
 static uint16_t rd16(const uint8_t *p)
 {
@@ -584,6 +586,18 @@ static vstat rrset_verify(struct vctx *v, const struct dnssec_msg *m,
     }
     /* only signatures that can be valid count, junk ones must not hide
        them (RFC 6840 5.4) */
+    for(k = 0; k < nkeys; k++) {
+      const struct dnssec_rr *key = &km->rrs[keys[k]];
+      const uint8_t *kd = DNSSEC_RR_RDATA(km, key);
+      if((kd[3] == s.alg) && (Curl_dnssec_keytag(kd, key->rdlen) == s.keytag))
+        break;
+    }
+    if(k == nkeys) {
+      why(v, "RRSIG for %s %s by key %u of %s: no such key",
+          NAMESTR(owner, v->nb[0]), typestr(set->type, tbuf, sizeof(tbuf)),
+          s.keytag, NAMESTR(signer, v->nb[1]));
+      continue;
+    }
     if(++tries > DNSSEC_MAX_SIGS)
       break;
     curlx_dyn_reset(&data);
@@ -720,7 +734,10 @@ static vstat rrset_validate(struct vctx *v, struct dnssec_msg *m,
 {
   struct dnssec_rr *set = &m->rrs[first];
   const uint8_t *owner = DNSSEC_RR_OWNER(m, set);
-  const uint8_t *ta = deepest_anchor(v->ctx, owner);
+  /* DS records are in the parent zone, validated with the anchors above */
+  const uint8_t *ta = (set->type != CURL_DNSSEC_TYPE_DS) ?
+    deepest_anchor(v->ctx, owner) :
+    (owner[0] ? deepest_anchor(v->ctx, owner + 1 + owner[0]) : NULL);
   unsigned int olabels = Curl_dnssec_name_labels(owner);
   unsigned int tlabels = ta ? Curl_dnssec_name_labels(ta) : 0;
   /* the signers seen, by their number of labels: they are all at or above
@@ -1131,7 +1148,9 @@ static vstat denial_collect(struct vctx *v, struct dnssec_msg *m,
                             const uint8_t *known, struct nsecs *ns)
 {
   struct dnssec_zone *z;
-  const uint8_t *ta = deepest_anchor(v->ctx, sname);
+  /* a DS denial is in the parent zone, validated with the anchors above */
+  const uint8_t *ta = !parent ? deepest_anchor(v->ctx, sname) :
+    (sname[0] ? deepest_anchor(v->ctx, sname + 1 + sname[0]) : NULL);
   unsigned int tlabels = 0;
   bool have_signer = FALSE;
   bool self = FALSE;
@@ -1233,26 +1252,10 @@ static vstat denial_collect(struct vctx *v, struct dnssec_msg *m,
     return VS_BOGUS;
   }
   if(ns->nsec3 && (ns->iterations > DNSSEC_NSEC3_MAX_ITER)) {
-    /* RFC 9276 3.2: too many iterations to check, the answer is insecure.
-       Only if the records are from the zone that holds 'sname', which the
-       proof would have shown. Otherwise the NSEC3 records of any zone
-       above could make anything below it insecure. */
-    if(!known) {
-      uint8_t zone[DNSSEC_NAME_MAX];
-      r = walk_down(v, sname, zone);
-      if(r != VS_SECURE)
-        return r;
-      if(!Curl_dnssec_name_eq(zone, ns->zone)) {
-        why(v, "NSEC3 records of %s cannot deny %s in %s",
-            NAMESTR(ns->zone, v->nb[0]), NAMESTR(sname, v->nb[1]),
-            NAMESTR(zone, v->nb[2]));
-        return VS_BOGUS;
-      }
-    }
     why(v, "NSEC3 records of %s use %u iterations, more than %u",
         NAMESTR(ns->zone, v->nb[0]), (unsigned int)ns->iterations,
         (unsigned int)DNSSEC_NSEC3_MAX_ITER);
-    return VS_INSECURE;
+    return VS_BOGUS;
   }
   return VS_SECURE;
 }
@@ -1499,7 +1502,8 @@ static vstat n3_hash(struct vctx *v, const struct nsecs *ns,
                      const uint8_t *name, uint8_t hash[DNSSEC_NSEC3_HASHLEN])
 {
   uint8_t lower[DNSSEC_NAME_MAX];
-  if(++v->ctx->nhash > DNSSEC_MAX_NSEC3_HASH) {
+  v->ctx->nhash += (unsigned long)ns->iterations + 1;
+  if(v->ctx->nhash > DNSSEC_MAX_NSEC3_WORK) {
     why(v, "too many NSEC3 hash calculations");
     return VS_INDETERMINATE;
   }
@@ -1919,13 +1923,8 @@ done:
   return r;
 }
 
-/* Find the security status of the zone 'name' is in, starting at the
-   closest trust anchor and walking down one label at a time, asking for
-   the DS records at each name (RFC 4035 section 5.2, RFC 6840 section 4.4).
-   Returns VS_INSECURE when there is a proven unsigned delegation above
-   'name', and VS_SECURE when 'name' is in a secure zone, where all data
-   must be signed. That zone is then copied to 'zone', if not NULL. */
-static vstat walk_down(struct vctx *v, const uint8_t *name, uint8_t *zone)
+static vstat walk_down_labels(struct vctx *v, const uint8_t *name,
+                              uint8_t *zone)
 {
   struct Curl_dnssec_ctx *ctx = v->ctx;
   const uint8_t *ta = deepest_anchor(ctx, name);
@@ -1983,7 +1982,7 @@ static vstat walk_down(struct vctx *v, const uint8_t *name, uint8_t *zone)
       if(m->rrs[first].type == CURL_DNSSEC_TYPE_CNAME) {
         /* with the proof, when it is a wildcard expansion */
         ttl = 0xffffffff;
-        r = answer_rrset(v, m, first, &ttl);
+        r = answer_rrset(v, m, first, cur, &ttl);
         if(r != VS_SECURE)
           return r;
         continue;
@@ -2034,14 +2033,35 @@ static vstat walk_down(struct vctx *v, const uint8_t *name, uint8_t *zone)
   return VS_SECURE;
 }
 
+/* Find the security status of the zone 'name' is in, starting at the
+   closest trust anchor and walking down one label at a time, asking for
+   the DS records at each name (RFC 4035 section 5.2, RFC 6840 section 4.4).
+   Returns VS_INSECURE when there is a proven unsigned delegation above
+   'name', and VS_SECURE when 'name' is in a secure zone, where all data
+   must be signed. That zone is then copied to 'zone', if not NULL. */
+static vstat walk_down(struct vctx *v, const uint8_t *name, uint8_t *zone)
+{
+  vstat r;
+  /* walk_down() and zone_keys() can call each other, through the proofs
+     they need */
+  if(v->depth >= DNSSEC_MAX_DEPTH) {
+    why(v, "chain of trust too long");
+    return VS_INDETERMINATE;
+  }
+  v->depth++;
+  r = walk_down_labels(v, name, zone);
+  v->depth--;
+  return r;
+}
+
 /*
  * Answers
  */
 
 /* Validate an answer RRset and, for a wildcard expansion, the proof that
-   the wildcard applies */
+   the wildcard applies. 'known' is the zone that holds it, if known. */
 static vstat answer_rrset(struct vctx *v, struct dnssec_msg *m, size_t first,
-                          uint32_t *pttl)
+                          const uint8_t *known, uint32_t *pttl)
 {
   const uint8_t *owner = DNSSEC_RR_OWNER(m, &m->rrs[first]);
   const uint8_t *signer;
@@ -2052,7 +2072,7 @@ static vstat answer_rrset(struct vctx *v, struct dnssec_msg *m, size_t first,
   if((r == VS_SECURE) && (labels < Curl_dnssec_name_sig_labels(owner))) {
     /* expanded from a wildcard, RFC 4035 5.3.4 and RFC 5155 8.8 */
     struct nsecs ns;
-    r = denial_collect(v, m, owner, FALSE, NULL, &ns);
+    r = denial_collect(v, m, owner, FALSE, known, &ns);
     if(r == VS_SECURE) {
       if(!Curl_dnssec_name_eq(ns.zone, signer)) {
         why(v, "the wildcard proof for %s is from another zone",
@@ -2239,7 +2259,7 @@ static vstat req_eval(struct vctx *v)
         total = VS_BOGUS;
         break;
       }
-      r = answer_rrset(v, m, first, &ttl);
+      r = answer_rrset(v, m, first, NULL, &ttl);
       if(r == VS_PENDING)
         return r;
       total = vs_combine(total, r);
@@ -2269,7 +2289,7 @@ static vstat req_eval(struct vctx *v)
     else {
       first = rrset_find(m, DNSSEC_SECT_ANSWER, sname, req->qtype);
       if(first != DNSSEC_NONE) {
-        r = answer_rrset(v, m, first, &ttl);
+        r = answer_rrset(v, m, first, NULL, &ttl);
         if(r == VS_PENDING)
           return r;
         total = vs_combine(total, r);
@@ -2288,7 +2308,7 @@ static vstat req_eval(struct vctx *v)
         why(v, "bad CNAME record for %s", NAMESTR(sname, v->nb[0]));
         return VS_BOGUS;
       }
-      r = answer_rrset(v, m, first, &ttl);
+      r = answer_rrset(v, m, first, NULL, &ttl);
       if(r == VS_PENDING)
         return r;
       total = vs_combine(total, r);
@@ -2747,8 +2767,10 @@ CURLcode Curl_dnssec_req_run(struct Curl_dnssec_req *req)
         n++;
     }
     req->rdoffs = curlx_malloc((n + 1) * sizeof(size_t));
-    if(!req->rdoffs)
+    if(!req->rdoffs) {
+      req->status = CURL_DNSSEC_INDETERMINATE;
       return CURLE_OUT_OF_MEMORY;
+    }
     for(i = req->afirst; i < m->nrrs; i++) {
       if(!rr_same_set(m, &m->rrs[i], &m->rrs[req->afirst]))
         continue;
@@ -2756,6 +2778,7 @@ CURLcode Curl_dnssec_req_run(struct Curl_dnssec_req *req)
       if(Curl_dnssec_rdata_canonical(m, &m->rrs[i], &req->rdata)) {
         /* validated records are well-formed, unless out of memory */
         req->acount = 0;
+        req->status = CURL_DNSSEC_INDETERMINATE;
         return CURLE_OUT_OF_MEMORY;
       }
     }

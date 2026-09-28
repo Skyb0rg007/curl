@@ -768,6 +768,7 @@ ZONES = [
         ('nsec.test.', True), ('nsec3.test.', True), ('optout.test.', True),
         ('ed448.test.', True), ('rsa512.test.', True), ('sha1.test.', True),
         ('iter.test.', True), ('iter50.test.', True),
+        ('iter200.test.', True),
         ('badds.test.', 'bad'),
         ('unsigned.test.', False)]),
     ('nsec.test.', 8, 'nsec', '''
@@ -778,6 +779,7 @@ alias CNAME www
 ext CNAME www.nsec3.test.
 dn DNAME nsec3.test.
 *.wild A 192.0.2.2
+*.wc CNAME www
 *.wild TXT "wildcard"
 b.wild A 192.0.2.4
 a.b.ent A 192.0.2.3
@@ -799,6 +801,7 @@ a.b.ent A 192.0.2.3
     ('rsa512.test.', 10, 'nsec', 'www A 192.0.2.14\n', []),
     ('sha1.test.', 5, 'nsec', 'www A 192.0.2.15\n', []),
     # BIND does not sign with more than 50 NSEC3 iterations, ldns does
+    ('iter200.test.', 13, 'ldns-iter200', 'www A 192.0.2.23\n', []),
     ('iter.test.', 13, 'ldns-iter', 'www A 192.0.2.16\n',
      [('low.iter.test.', True)]),
     ('low.iter.test.', 13, 'nsec3', 'www A 192.0.2.20\n',
@@ -849,11 +852,12 @@ def sign_zones(tmp, now):
             f.write(text)
         if alg is None:
             continue
-        if mode == 'ldns-iter':
+        if mode in ('ldns-iter', 'ldns-iter200'):
             key = run(['ldns-keygen', '-a', ALGS[alg], '-k', zone],
                       tmp).strip()
             ds[zone] = run(['ldns-key2ds', '-n', '-2', key + '.key'], tmp)
-            run(['ldns-signzone', '-n', '-t', '100', '-s', 'abcd',
+            iters = '200' if mode == 'ldns-iter200' else '100'
+            run(['ldns-signzone', '-n', '-t', iters, '-s', 'abcd',
                  '-i', str(now - 3600), '-e', str(now + 30 * 86400),
                  '-f', base + '.zone.signed', '-o', zone, base + '.zone',
                  key], tmp)
@@ -997,10 +1001,15 @@ def bind_cases(tmp):
             ('www.ed448.test.', 'A', 'ED448', SECURE, 0, 1),
             ('www.rsa512.test.', 'A', 'RSASHA512', SECURE, 0, 1),
             ('www.sha1.test.', 'A', 'RSASHA1 not accepted', INSECURE, 0, 1),
-            ('nx.iter.test.', 'A', 'NSEC3 with 100 iterations', INSECURE,
+            ('nx.iter.test.', 'A', 'NSEC3 with 100 iterations', SECURE,
              3, 0),
             ('www.iter.test.', 'A', 'answer from zone with 100 iterations',
              SECURE, 0, 1),
+            ('nx.iter200.test.', 'A', 'NSEC3 with 200 iterations', BOGUS,
+             None, 0),
+            ('www.iter200.test.', 'A', 'answer from zone with 200 iterations',
+             SECURE, 0, 1),
+            ('x.wc.nsec.test.', 'A', 'wildcard CNAME', SECURE, 0, 1),
             ('nx.iter50.test.', 'A', 'NSEC3 with 50 iterations', SECURE, 3,
              0),
             ('www.low.iter.test.', 'A', 'zone below 100 iterations', SECURE,
@@ -1152,8 +1161,21 @@ def bind_cases(tmp):
                        make_msg('sub.nsec.test.', 'DS', 0, [],
                                 sub_soa + apex3))])
 
-        # NSEC3 records with too many iterations from a zone above the one
-        # that holds the name prove nothing
+        # A wildcard CNAME without its proof as the answer to a DS query on
+        # the walk down to an unsigned answer. This used to recurse forever.
+        wc = dns.message.from_wire(t.get('x.wc.nsec.test.', 'A'))
+        wc_cname = [rs for rs in wc.answer
+                    if rs.name == n('x.wc.nsec.test.') and
+                    dns.rdatatype.CNAME in (rs.rdtype, rs.covers)]
+        wc_plain = [rs for rs in wc_cname
+                    if rs.rdtype != dns.rdatatype.RRSIG]
+        attack('wildcard CNAME on the walk without proof', 'x.wc.nsec.test.',
+               'A', BOGUS, make_msg('x.wc.nsec.test.', 'A', 0, wc_plain, []),
+               extra=[('x.wc.nsec.test.', 'DS',
+                       make_msg('x.wc.nsec.test.', 'DS', 0, wc_cname, []))])
+
+        # NSEC3 records from a zone above the one that holds the name prove
+        # nothing
         it = signed_zone(tmp, 'iter.test.')
         it_soa = zone_rrsets(it, 'iter.test.', 'SOA')
         it_n3 = []
